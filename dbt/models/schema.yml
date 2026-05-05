@@ -1,17 +1,1 @@
-version: 2
-
-models:
-  - name: stg_payments
-    description: "Raw payment events parsed from Kafka ingestion pipeline"
-    columns:
-      - name: payment_id
-        tests:
-          - unique
-          - not_null
-      - name: amount
-        tests:
-          - elementary.volume_anomalies:
-              time_bucket:
-                period: hour
-                count: 1
-              severity: warn
+dbt/models/schema.yml
