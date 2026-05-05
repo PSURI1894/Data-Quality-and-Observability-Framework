@@ -1,0 +1,13 @@
+# Data Quality Check Registry - v1.0.0
+datasets:
+  - urn: "db.payments.raw_events"
+    owner: "payments_team"
+    sla:
+      freshness_minutes: 60
+    expectations:
+      - expectation_type: "expect_table_columns_to_match_ordered_list"
+        kwargs:
+          column_list: ["payment_id", "user_id", "amount", "currency", "status", "created_at"]
+      - expectation_type: "expect_column_values_to_not_be_null"
+        kwargs:
+          column: "payment_id"
