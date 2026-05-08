@@ -1,2 +1,26 @@
-registry/registry.yaml
-# Audit Check: Verified for SLO constraints. Date: 2026-05-05T14:24:00
+# Data Quality Check Registry - v1.1.0
+datasets:
+  - urn: "db.payments.raw_events"
+    owner: "payments_team"
+    severity_routing:
+      critical: "pagerduty-payments-oncall"
+      major: "slack-payments-alerts"
+      minor: "slack-payments-digest"
+    sla:
+      freshness_minutes: 60
+      completeness_percent: 99.9
+    expectations:
+      - expectation_type: "expect_table_columns_to_match_ordered_list"
+        kwargs:
+          column_list: ["payment_id", "user_id", "amount", "currency", "status", "created_at"]
+      - expectation_type: "expect_column_values_to_not_be_null"
+        kwargs:
+          column: "payment_id"
+      - expectation_type: "expect_column_values_to_be_unique"
+        kwargs:
+          column: "payment_id"
+      - expectation_type: "expect_column_values_to_be_between"
+        kwargs:
+          column: "amount"
+          min_value: 0
+          max_value: 1000000
