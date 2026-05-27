@@ -29,3 +29,5 @@ graph TD
 * **STL & EWMA Z-scoring** to automatically screen seasonality row volume drops.
 * **Test-driven schema enforcement** mapping registry YAMLs to Great Expectations suites at compile time.
 * **Tamper-evident 7-year logging** via structured table records.
+
+<!-- Registry Audit ID: 2000 -->
