@@ -31,3 +31,5 @@ graph TD
 * **Tamper-evident 7-year logging** via structured table records.
 
 <!-- Registry Audit ID: 2000 -->
+
+<!-- Registry Audit ID: 2001 -->
