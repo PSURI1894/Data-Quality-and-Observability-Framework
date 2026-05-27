@@ -1,1 +1,31 @@
-# Data Quality and Observability Framework\nInitial project bootstrap.
+# Data Quality and Observability Framework (Data SRE)
+
+A highly resilient and modular Data SRE engine wrapping an enterprise analytics lakehouse platform with data quality assertions, SLO state trackers, statistical anomaly detectors, and incident automated response protocols.
+
+## System Architecture
+
+```mermaid
+graph TD
+    Sources[(Data Store)] -->|OpenLineage| Marquez[Marquez Lineage backend]
+    Sources -->|dbt Build / GE Checks| DQEngine[DQ Validation Runner]
+    DQEngine -->|Log Outputs| DB[(SLO Postgres db)]
+    DB -->|State tracking| SLOTracker[SLO State Tracker]
+    SLOTracker -->|Metric plots| Grafana[Grafana Dashboard Portal]
+    SLOTracker -->|SLA Breach alerts| Incidents[Incident Bot slack pagerduty]
+    
+    Incidents -->|Resolve blame| Developer[git blame lookup]
+```
+
+## Tech Stack
+* **Great Expectations 0.18+**
+* **dbt & Elementary OSS**
+* **OpenLineage & Marquez**
+* **Apache Airflow**
+* **Postgres & Grafana**
+* **Python 3.14**
+
+## Features
+* **Sub-10m alert response** via custom Git blame blame-routing algorithms.
+* **STL & EWMA Z-scoring** to automatically screen seasonality row volume drops.
+* **Test-driven schema enforcement** mapping registry YAMLs to Great Expectations suites at compile time.
+* **Tamper-evident 7-year logging** via structured table records.
