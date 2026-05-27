@@ -1,435 +1,165 @@
 # Data Quality and Observability Framework (Data SRE)
 
-A highly resilient and modular Data SRE engine wrapping an enterprise analytics lakehouse platform with data quality assertions, SLO state trackers, statistical anomaly detectors, and incident automated response protocols.
+A modular, enterprise-grade Data Site Reliability Engineering (Data SRE) framework that wraps analytical lakehouses and database platforms with configuration-driven validations, end-to-end lineage extraction, data SLO tracking, statistical anomaly detection, and automated on-call incident response.
 
-## System Architecture
+This repository provides a concrete implementation of **Project 8: Data Quality and Observability Framework** from the Data Engineering Compendium.
+
+---
+
+## 1. System Architecture & Component Design
+
+The framework operates on a decoupled, configuration-driven model that overlays existing batch and streaming ingestion pipelines with verification check gates, OpenLineage emitters, state trackers, and incident bots.
 
 ```mermaid
 graph TD
-    Sources[(Data Store)] -->|OpenLineage| Marquez[Marquez Lineage backend]
-    Sources -->|dbt Build / GE Checks| DQEngine[DQ Validation Runner]
-    DQEngine -->|Log Outputs| DB[(SLO Postgres db)]
-    DB -->|State tracking| SLOTracker[SLO State Tracker]
-    SLOTracker -->|Metric plots| Grafana[Grafana Dashboard Portal]
-    SLOTracker -->|SLA Breach alerts| Incidents[Incident Bot slack pagerduty]
-    
-    Incidents -->|Resolve blame| Developer[git blame lookup]
+    subgraph Data Pipeline Ingestion
+        RawAPI[Raw Kafka Payment Stream] -->|1. Ingestion Task| StgTable[(stg_payments)]
+        StgTable -->|2. dbt build & test| MartTable[(fact_payment_observability)]
+    end
+
+    subgraph OpenLineage & Metadata Store
+        StgTable -.->|Lineage Events| Marquez[Marquez Engine]
+        MartTable -.->|Lineage Events| Marquez
+    end
+
+    subgraph Data Quality Assertion Layer
+        dbtRun[dbt Test Suite] -->|3. Elementary Integration| ChecksDB[(Postgres checks_results)]
+        geRun[validator.py / GE Checkpoints] -->|4. GE Assertions| ChecksDB
+    end
+
+    subgraph SLO Tracker & Incident Automation
+        ChecksDB -->|5. rolling 24h checks| SLOTracker[slo_tracker.py]
+        SLOTracker -->|Update States| SLOStateDB[(Postgres slo_state)]
+        SLOStateDB -->|6. Render Metrics| Grafana[Grafana Dashboard]
+        
+        SLOStateDB -->|7. SLO Breaches| IncidentBot[incident_bot.py]
+        IncidentBot -->|8. Suspect blame lookup| GitRepo[(Git Logs)]
+        IncidentBot -->|9. Route alerts| Slack[Slack Channels]
+        IncidentBot -->|10. Trigger on-call| PagerDuty[PagerDuty API]
+    end
+
+    style Data Pipeline Ingestion fill:#1b1d2e,stroke:#3b405e,stroke-width:2px,color:#fff
+    style OpenLineage & Metadata Store fill:#191d0f,stroke:#4a5e26,stroke-width:2px,color:#fff
+    style Data Quality Assertion Layer fill:#220f0f,stroke:#5e2626,stroke-width:2px,color:#fff
+    style SLO Tracker & Incident Automation fill:#0f2214,stroke:#265e38,stroke-width:2px,color:#fff
 ```
 
-## Tech Stack
-* **Great Expectations 0.18+**
-* **dbt & Elementary OSS**
-* **OpenLineage & Marquez**
-* **Apache Airflow**
-* **Postgres & Grafana**
-* **Python 3.14**
+---
+
+## 2. Pillars of the Observability Framework
+
+### A. Configuration-Driven Check Registry (`registry.yaml`)
+We treat data quality assertions as code. Upstream engineers register datasets in a centralized YAML manifest containing structural metrics, ownership information, severity routes, and specific Great Expectations rules. The parser translates these into expectation suites dynamically at runtime.
+
+### B. Runtime Validator (`validator.py`)
+Runs validation pipelines. It reads the registry, fetches expectation suites, queries Postgres/lakehouse targets, translates validations intoGreat Expectations RuntimeBatchRequests, runs checkpoints, and pushes check metrics (success rates, failed thresholds, observed counts) into a central database.
+
+### C. Data Lineage Store (`lineage.py`)
+Uses the OpenLineage specification standard to hook into Airflow operators and dbt runs. On task status updates, lineage payloads are dispatched to a local Marquez server which visualizes column-level and DAG-level dependency maps.
+
+### D. Data SLO Tracker (`slo_tracker.py`)
+A background service computing actual data service levels over sliding windows. Instead of basic alarm thresholds, the tracker processes mathematical SLO states (Healthy, Degraded, Down) and saves updates into Postgres.
 
-## Features
-* **Sub-10m alert response** via custom Git blame blame-routing algorithms.
-* **STL & EWMA Z-scoring** to automatically screen seasonality row volume drops.
-* **Test-driven schema enforcement** mapping registry YAMLs to Great Expectations suites at compile time.
-* **Tamper-evident 7-year logging** via structured table records.
+### E. Alert Routing & Blame Resolution (`incident_bot.py`)
+On SLO breach, the incident responder triggers, routes critical alerts to Slack, queries Git history via `git blame` to identify recent query modifications, pages on-call SREs, and attaches Marquez lineage subgraphs and playbook runbooks.
 
-<!-- Registry Audit ID: 2000 -->
+### F. Statistical Anomaly Detector (`anomaly_detector.py`)
+Implements standard Z-scoring alongside Exponentially Weighted Moving Average (EWMA) to identify data volume drops, row-count shifts, and null-rate spikes, avoiding false-alarm triggers on seasonal weekends or holiday cycles.
 
-<!-- Registry Audit ID: 2001 -->
+---
 
-<!-- Registry Audit ID: 2002 -->
+## 3. Database Schema Models
 
-<!-- Registry Audit ID: 2003 -->
+We track SRE observability state inside a central Postgres instance. The database schema holds tables mapping check results, registries, alerts, and SLO statuses:
 
-<!-- Registry Audit ID: 2004 -->
+### `checks_results`
+Stores the output of every Great Expectations check or dbt test:
+* `run_id` (VARCHAR): Unique pipeline execution ID.
+* `dataset_urn` (VARCHAR): Target table representation (e.g. `db.payments.raw_events`).
+* `expectation_id` (VARCHAR): Expectation check name (e.g. `expect_column_values_to_not_be_null`).
+* `severity` (VARCHAR): Critical, Major, or Minor.
+* `status` (VARCHAR): `PASS`, `FAIL`, or `WARN`.
+* `observed_value` (TEXT): The value recorded during check runs.
+* `threshold` (TEXT): The registered bounds.
+* `run_at` (TIMESTAMP): Event completion timestamp.
 
-<!-- Registry Audit ID: 2005 -->
+### `slo_state`
+Maintains rolling service level indices:
+* `dataset_urn` (VARCHAR): Target table representation.
+* `freshness_sla_pct` (DECIMAL): Measured freshness SLA percentage over a 24-hour window.
+* `completeness_sla_pct` (DECIMAL): Measured row completeness SLA percentage.
+* `validity_sla_pct` (DECIMAL): Percentage of critical validation checks passing.
+* `status` (VARCHAR): `Healthy`, `Degraded`, or `Down`.
+* `updated_at` (TIMESTAMP): State recalculation timestamp.
 
-<!-- Registry Audit ID: 2006 -->
+---
 
-<!-- Registry Audit ID: 2007 -->
+## 4. Mathematical Specifications
 
-<!-- Registry Audit ID: 2008 -->
+Our Data SLO metrics are calculated over a rolling 24-hour window according to SRE metrics:
 
-<!-- Registry Audit ID: 2009 -->
+### Freshness SLA
+Calculated as the percentage of expected updates that occurred within the SLA threshold:
+$$\text{Freshness SLA} = \frac{\sum_{t=1}^{N} I(t_{\text{now}} - t_{\text{last\_update}} \le \text{Threshold})}{N} \ge 99.5\%$$
+*Where $I()$ is the indicator function, and $N$ represents the samples per day.*
 
-<!-- Registry Audit ID: 2010 -->
+### Completeness SLA
+Tracks row completeness across ingestion windows:
+$$\text{Completeness SLA} = \frac{\text{Expected Rows} - \text{Missing Rows}}{\text{Expected Rows}} \ge 99.9\%$$
 
-<!-- Registry Audit ID: 2011 -->
+### Validity SLA
+Proportion of critical validation checks that passed:
+$$\text{Validity SLA} = \frac{\text{Passing Critical Checks}}{\text{Total Critical Checks}} \ge 99.99\%$$
 
-<!-- Registry Audit ID: 2012 -->
+---
 
-<!-- Registry Audit ID: 2013 -->
+## 5. Local Runtime & Development Guide
 
-<!-- Registry Audit ID: 2014 -->
+### Prerequisites
+* Docker & Docker Compose
+* Python 3.10+
+* Git
 
-<!-- Registry Audit ID: 2015 -->
+### Step 1: Spin Up Infrastructure Services
+Start the Postgres, Marquez, and Grafana databases in the background:
+```bash
+docker-compose up -d
+```
 
-<!-- Registry Audit ID: 2016 -->
+Verify that all services are online:
+```bash
+docker-compose ps
+```
+* **Marquez UI**: Available at [http://localhost:5000](http://localhost:5000)
+* **Grafana Portals**: Available at [http://localhost:3000](http://localhost:3000) (User: `admin` / Password: `admin`)
+* **Postgres Database**: Available at `localhost:5432`
 
-<!-- Registry Audit ID: 2017 -->
+### Step 2: Configure Local Python Environment
+Create a virtual environment and install validation tools:
+```bash
+python -m venv venv
+source venv/bin/activate  # On Windows: .\venv\Scripts\activate
+pip install -r dbt/requirements.txt  # Installs pytest, great_expectations, requests, psycopg2
+```
 
-<!-- Registry Audit ID: 2018 -->
+### Step 3: Run Validation Tests
+Execute local tests to ensure the validation suite passes:
+```bash
+pytest tests/
+```
 
-<!-- Registry Audit ID: 2019 -->
+### Step 4: Run Airflow pipeline DAGs
+In your orchestrator, trigger the pipeline:
+```bash
+airflow dags trigger payment_ingestion_pipeline
+```
+This automatically runs the Flink/dbt pipelines, registers task lineage nodes in Marquez, and triggers `validator.py` checkpoint logging.
 
-<!-- Registry Audit ID: 2020 -->
+---
 
-<!-- Registry Audit ID: 2021 -->
+## 6. Operational Incident Runbooks
 
-<!-- Registry Audit ID: 2022 -->
+We provide structured runbooks inside the `runbooks/` directory for immediate mitigation of SLO breaches:
 
-<!-- Registry Audit ID: 2023 -->
-
-<!-- Registry Audit ID: 2024 -->
-
-<!-- Registry Audit ID: 2025 -->
-
-<!-- Registry Audit ID: 2026 -->
-
-<!-- Registry Audit ID: 2027 -->
-
-<!-- Registry Audit ID: 2028 -->
-
-<!-- Registry Audit ID: 2029 -->
-
-<!-- Registry Audit ID: 2030 -->
-
-<!-- Registry Audit ID: 2031 -->
-
-<!-- Registry Audit ID: 2032 -->
-
-<!-- Registry Audit ID: 2033 -->
-
-<!-- Registry Audit ID: 2034 -->
-
-<!-- Registry Audit ID: 2035 -->
-
-<!-- Registry Audit ID: 2036 -->
-
-<!-- Registry Audit ID: 2037 -->
-
-<!-- Registry Audit ID: 2038 -->
-
-<!-- Registry Audit ID: 2039 -->
-
-<!-- Registry Audit ID: 2040 -->
-
-<!-- Registry Audit ID: 2041 -->
-
-<!-- Registry Audit ID: 2042 -->
-
-<!-- Registry Audit ID: 2043 -->
-
-<!-- Registry Audit ID: 2044 -->
-
-<!-- Registry Audit ID: 2045 -->
-
-<!-- Registry Audit ID: 2046 -->
-
-<!-- Registry Audit ID: 2047 -->
-
-<!-- Registry Audit ID: 2048 -->
-
-<!-- Registry Audit ID: 2049 -->
-
-<!-- Registry Audit ID: 2050 -->
-
-<!-- Registry Audit ID: 2051 -->
-
-<!-- Registry Audit ID: 2052 -->
-
-<!-- Registry Audit ID: 2053 -->
-
-<!-- Registry Audit ID: 2054 -->
-
-<!-- Registry Audit ID: 2055 -->
-
-<!-- Registry Audit ID: 2056 -->
-
-<!-- Registry Audit ID: 2057 -->
-
-<!-- Registry Audit ID: 2058 -->
-
-<!-- Registry Audit ID: 2059 -->
-
-<!-- Registry Audit ID: 2060 -->
-
-<!-- Registry Audit ID: 2061 -->
-
-<!-- Registry Audit ID: 2062 -->
-
-<!-- Registry Audit ID: 2063 -->
-
-<!-- Registry Audit ID: 2064 -->
-
-<!-- Registry Audit ID: 2065 -->
-
-<!-- Registry Audit ID: 2066 -->
-
-<!-- Registry Audit ID: 2067 -->
-
-<!-- Registry Audit ID: 2068 -->
-
-<!-- Registry Audit ID: 2069 -->
-
-<!-- Registry Audit ID: 2070 -->
-
-<!-- Registry Audit ID: 2071 -->
-
-<!-- Registry Audit ID: 2072 -->
-
-<!-- Registry Audit ID: 2073 -->
-
-<!-- Registry Audit ID: 2074 -->
-
-<!-- Registry Audit ID: 2075 -->
-
-<!-- Registry Audit ID: 2076 -->
-
-<!-- Registry Audit ID: 2077 -->
-
-<!-- Registry Audit ID: 2078 -->
-
-<!-- Registry Audit ID: 2079 -->
-
-<!-- Registry Audit ID: 2080 -->
-
-<!-- Registry Audit ID: 2081 -->
-
-<!-- Registry Audit ID: 2082 -->
-
-<!-- Registry Audit ID: 2083 -->
-
-<!-- Registry Audit ID: 2084 -->
-
-<!-- Registry Audit ID: 2085 -->
-
-<!-- Registry Audit ID: 2086 -->
-
-<!-- Registry Audit ID: 2087 -->
-
-<!-- Registry Audit ID: 2088 -->
-
-<!-- Registry Audit ID: 2089 -->
-
-<!-- Registry Audit ID: 2090 -->
-
-<!-- Registry Audit ID: 2091 -->
-
-<!-- Registry Audit ID: 2092 -->
-
-<!-- Registry Audit ID: 2093 -->
-
-<!-- Registry Audit ID: 2094 -->
-
-<!-- Registry Audit ID: 2095 -->
-
-<!-- Registry Audit ID: 2096 -->
-
-<!-- Registry Audit ID: 2097 -->
-
-<!-- Registry Audit ID: 2098 -->
-
-<!-- Registry Audit ID: 2099 -->
-
-<!-- Registry Audit ID: 2100 -->
-
-<!-- Registry Audit ID: 2101 -->
-
-<!-- Registry Audit ID: 2102 -->
-
-<!-- Registry Audit ID: 2103 -->
-
-<!-- Registry Audit ID: 2104 -->
-
-<!-- Registry Audit ID: 2105 -->
-
-<!-- Registry Audit ID: 2106 -->
-
-<!-- Registry Audit ID: 2107 -->
-
-<!-- Registry Audit ID: 2108 -->
-
-<!-- Registry Audit ID: 2109 -->
-
-<!-- Registry Audit ID: 2110 -->
-
-<!-- Registry Audit ID: 2111 -->
-
-<!-- Registry Audit ID: 2112 -->
-
-<!-- Registry Audit ID: 2113 -->
-
-<!-- Registry Audit ID: 2114 -->
-
-<!-- Registry Audit ID: 2115 -->
-
-<!-- Registry Audit ID: 2116 -->
-
-<!-- Registry Audit ID: 2117 -->
-
-<!-- Registry Audit ID: 2118 -->
-
-<!-- Registry Audit ID: 2119 -->
-
-<!-- Registry Audit ID: 2120 -->
-
-<!-- Registry Audit ID: 2121 -->
-
-<!-- Registry Audit ID: 2122 -->
-
-<!-- Registry Audit ID: 2123 -->
-
-<!-- Registry Audit ID: 2124 -->
-
-<!-- Registry Audit ID: 2125 -->
-
-<!-- Registry Audit ID: 2126 -->
-
-<!-- Registry Audit ID: 2127 -->
-
-<!-- Registry Audit ID: 2128 -->
-
-<!-- Registry Audit ID: 2129 -->
-
-<!-- Registry Audit ID: 2130 -->
-
-<!-- Registry Audit ID: 2131 -->
-
-<!-- Registry Audit ID: 2132 -->
-
-<!-- Registry Audit ID: 2133 -->
-
-<!-- Registry Audit ID: 2134 -->
-
-<!-- Registry Audit ID: 2135 -->
-
-<!-- Registry Audit ID: 2136 -->
-
-<!-- Registry Audit ID: 2137 -->
-
-<!-- Registry Audit ID: 2138 -->
-
-<!-- Registry Audit ID: 2139 -->
-
-<!-- Registry Audit ID: 2140 -->
-
-<!-- Registry Audit ID: 2141 -->
-
-<!-- Registry Audit ID: 2142 -->
-
-<!-- Registry Audit ID: 2143 -->
-
-<!-- Registry Audit ID: 2144 -->
-
-<!-- Registry Audit ID: 2145 -->
-
-<!-- Registry Audit ID: 2146 -->
-
-<!-- Registry Audit ID: 2147 -->
-
-<!-- Registry Audit ID: 2148 -->
-
-<!-- Registry Audit ID: 2149 -->
-
-<!-- Registry Audit ID: 2150 -->
-
-<!-- Registry Audit ID: 2151 -->
-
-<!-- Registry Audit ID: 2152 -->
-
-<!-- Registry Audit ID: 2153 -->
-
-<!-- Registry Audit ID: 2154 -->
-
-<!-- Registry Audit ID: 2155 -->
-
-<!-- Registry Audit ID: 2156 -->
-
-<!-- Registry Audit ID: 2157 -->
-
-<!-- Registry Audit ID: 2158 -->
-
-<!-- Registry Audit ID: 2159 -->
-
-<!-- Registry Audit ID: 2160 -->
-
-<!-- Registry Audit ID: 2161 -->
-
-<!-- Registry Audit ID: 2162 -->
-
-<!-- Registry Audit ID: 2163 -->
-
-<!-- Registry Audit ID: 2164 -->
-
-<!-- Registry Audit ID: 2165 -->
-
-<!-- Registry Audit ID: 2166 -->
-
-<!-- Registry Audit ID: 2167 -->
-
-<!-- Registry Audit ID: 2168 -->
-
-<!-- Registry Audit ID: 2169 -->
-
-<!-- Registry Audit ID: 2170 -->
-
-<!-- Registry Audit ID: 2171 -->
-
-<!-- Registry Audit ID: 2172 -->
-
-<!-- Registry Audit ID: 2173 -->
-
-<!-- Registry Audit ID: 2174 -->
-
-<!-- Registry Audit ID: 2175 -->
-
-<!-- Registry Audit ID: 2176 -->
-
-<!-- Registry Audit ID: 2177 -->
-
-<!-- Registry Audit ID: 2178 -->
-
-<!-- Registry Audit ID: 2179 -->
-
-<!-- Registry Audit ID: 2180 -->
-
-<!-- Registry Audit ID: 2181 -->
-
-<!-- Registry Audit ID: 2182 -->
-
-<!-- Registry Audit ID: 2183 -->
-
-<!-- Registry Audit ID: 2184 -->
-
-<!-- Registry Audit ID: 2185 -->
-
-<!-- Registry Audit ID: 2186 -->
-
-<!-- Registry Audit ID: 2187 -->
-
-<!-- Registry Audit ID: 2188 -->
-
-<!-- Registry Audit ID: 2189 -->
-
-<!-- Registry Audit ID: 2190 -->
-
-<!-- Registry Audit ID: 2191 -->
-
-<!-- Registry Audit ID: 2192 -->
-
-<!-- Registry Audit ID: 2193 -->
-
-<!-- Registry Audit ID: 2194 -->
-
-<!-- Registry Audit ID: 2195 -->
-
-<!-- Registry Audit ID: 2196 -->
-
-<!-- Registry Audit ID: 2197 -->
-
-<!-- Registry Audit ID: 2198 -->
-
-<!-- Registry Audit ID: 2199 -->
-
-<!-- Registry Audit ID: 2200 -->
-
-<!-- Registry Audit ID: 2201 -->
+* **[Freshness SLA Breach Playbook](file:///runbooks/freshness_sla_breach.md)**: Steps for identifying upstream Airflow blockages, debugging Kafka listener lags, and contact maps for downstream consumers.
+* **[Data Validation Failure Playbook](file:///runbooks/data_validation_failure.md)**: Details on tracing anomalies, executing immediate git blame resolutions, and executing rolling table partitions recovery routines.
