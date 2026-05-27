@@ -12,22 +12,22 @@ The framework operates on a decoupled, configuration-driven model that overlays 
 
 ```mermaid
 graph TD
-    subgraph Data Pipeline Ingestion
+    subgraph Ingestion [Payment Data Pipeline]
         RawAPI[Raw Kafka Payment Stream] -->|1. Ingestion Task| StgTable[(stg_payments)]
         StgTable -->|2. dbt build & test| MartTable[(fact_payment_observability)]
     end
 
-    subgraph OpenLineage & Metadata Store
+    subgraph LineageStore [OpenLineage & Metadata Store]
         StgTable -.->|Lineage Events| Marquez[Marquez Engine]
         MartTable -.->|Lineage Events| Marquez
     end
 
-    subgraph Data Quality Assertion Layer
+    subgraph Validation [Data Quality Assertion Layer]
         dbtRun[dbt Test Suite] -->|3. Elementary Integration| ChecksDB[(Postgres checks_results)]
         geRun[validator.py / GE Checkpoints] -->|4. GE Assertions| ChecksDB
     end
 
-    subgraph SLO Tracker & Incident Automation
+    subgraph SLOIncidents [SLO Tracker & Incident Automation]
         ChecksDB -->|5. rolling 24h checks| SLOTracker[slo_tracker.py]
         SLOTracker -->|Update States| SLOStateDB[(Postgres slo_state)]
         SLOStateDB -->|6. Render Metrics| Grafana[Grafana Dashboard]
@@ -38,10 +38,10 @@ graph TD
         IncidentBot -->|10. Trigger on-call| PagerDuty[PagerDuty API]
     end
 
-    style Data Pipeline Ingestion fill:#1b1d2e,stroke:#3b405e,stroke-width:2px,color:#fff
-    style OpenLineage & Metadata Store fill:#191d0f,stroke:#4a5e26,stroke-width:2px,color:#fff
-    style Data Quality Assertion Layer fill:#220f0f,stroke:#5e2626,stroke-width:2px,color:#fff
-    style SLO Tracker & Incident Automation fill:#0f2214,stroke:#265e38,stroke-width:2px,color:#fff
+    style Ingestion fill:#1b1d2e,stroke:#3b405e,stroke-width:2px,color:#fff
+    style LineageStore fill:#191d0f,stroke:#4a5e26,stroke-width:2px,color:#fff
+    style Validation fill:#220f0f,stroke:#5e2626,stroke-width:2px,color:#fff
+    style SLOIncidents fill:#0f2214,stroke:#265e38,stroke-width:2px,color:#fff
 ```
 
 ---
@@ -100,7 +100,7 @@ Our Data SLO metrics are calculated over a rolling 24-hour window according to S
 
 ### Freshness SLA
 Calculated as the percentage of expected updates that occurred within the SLA threshold:
-$$\text{Freshness SLA} = \frac{\sum_{t=1}^{N} I(t_{\text{now}} - t_{\text{last\_update}} \le \text{Threshold})}{N} \ge 99.5\%$$
+$$\text{Freshness SLA} = \frac{\sum_{t=1}^{N} I(t_{\text{now}} - t_{\text{last-update}} \le \text{Threshold})}{N} \ge 99.5\%$$
 *Where $I()$ is the indicator function, and $N$ represents the samples per day.*
 
 ### Completeness SLA
